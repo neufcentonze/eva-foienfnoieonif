@@ -135,6 +135,53 @@
         }
     });
 
+    // --- PRÉDICTION DE SÉCURITÉ FUTURE ---
+    const futurePredictor = {
+        lastTimestamp: Date.now(),
+        previous: {},
+        velocities: {},
+        update(entities) {
+            const now = Date.now();
+            const dt = (now - this.lastTimestamp) / 1000;
+            if (dt > 0) {
+                const newVel = {};
+                for (const [id, e] of Object.entries(entities)) {
+                    const prev = this.previous[id];
+                    if (prev) {
+                        newVel[id] = {
+                            x: (e.x - prev.x) / dt,
+                            y: (e.y - prev.y) / dt
+                        };
+                    } else {
+                        newVel[id] = { x: 0, y: 0 };
+                    }
+                    this.previous[id] = { x: e.x, y: e.y };
+                }
+                this.velocities = newVel;
+                for (const id of Object.keys(this.previous)) {
+                    if (!entities[id]) delete this.previous[id];
+                }
+                this.lastTimestamp = now;
+            }
+        },
+        willBeSafe(player, entities, seconds) {
+            const px = player.x;
+            const py = player.y;
+            const pr = player.radius || 15;
+            for (const [id, e] of Object.entries(entities)) {
+                if (!e || e.id === player.id || e.isHarmless || e.entityType === 1) continue;
+                const vel = this.velocities[id] || { x: 0, y: 0 };
+                const ex = e.x + vel.x * seconds;
+                const ey = e.y + vel.y * seconds;
+                const er = e.radius || 15;
+                const dx = ex - px;
+                const dy = ey - py;
+                if (dx * dx + dy * dy < (pr + er + 5) ** 2) return false;
+            }
+            return true;
+        }
+    };
+
     // --- BOUCLE D'AFFICHAGE ---
     function updateDisplayLoop() {
         requestAnimationFrame(updateDisplayLoop);
@@ -143,6 +190,8 @@
         if (!modules || !modules.network) return;
 
         const playerState = modules.network.getPlayerState();
+        const entities = modules.gameState ? modules.gameState.entities || {} : {};
+        futurePredictor.update(entities);
 
         if (playerState && playerState.id) {
             const area = modules.gameState ? modules.gameState.area : null;
@@ -176,11 +225,18 @@
             }
             const dangerColor = isCurrentlyInDanger ? '#FF4136' : '#34d3eb';
 
+            const safeIn1 = modules.gameState && modules.gameState.entities ? futurePredictor.willBeSafe(playerState, modules.gameState.entities, 1) : true;
+            const safeIn2 = modules.gameState && modules.gameState.entities ? futurePredictor.willBeSafe(playerState, modules.gameState.entities, 2) : true;
+            const safe1Color = safeIn1 ? '#00FF7F' : '#FF4500';
+            const safe2Color = safeIn2 ? '#00FF7F' : '#FF4500';
+
             infoDisplay.innerHTML = `
                 <div style="font-weight: bold;">${playerState.heroName || "N/A"} - Lvl ${playerState.level || "?"}</div>
                 <div>Position: ${playerState.x.toFixed(0)}, ${playerState.y.toFixed(0)}</div>
                 <div style="font-weight: bold; color: ${safeZoneColor};">Zone Sûre: ${safeZoneStatus}</div>
                 <div style="font-weight: bold; color: ${dangerColor};">Danger Immédiat: ${dangerStatus}</div>
+                <div style="font-weight: bold; color: ${safe1Color};">Sûr dans 1 s: ${safeIn1 ? 'Oui' : 'Non'}</div>
+                <div style="font-weight: bold; color: ${safe2Color};">Sûr dans 2 s: ${safeIn2 ? 'Oui' : 'Non'}</div>
             `;
             dashboardElement.style.borderColor = isCurrentlyInDanger ? dangerColor : safeZoneColor;
         } else {
