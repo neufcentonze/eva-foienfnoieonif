@@ -52,6 +52,14 @@
         smoothedMove: { x: 0, y: 0 },
         SMOOTHING_FACTOR: 0.15, // Plus c'est bas, plus le mouvement est fluide. 0.1 - 0.3 est une bonne plage.
 
+        predictEntityPosition: (entity, deltaMs) => {
+            const vel = (entity && entity.velocity) ? entity.velocity : { x: 0, y: 0 };
+            return {
+                x: entity.x + vel.x * (deltaMs / 1000),
+                y: entity.y + vel.y * (deltaMs / 1000)
+            };
+        },
+
         calculateBestMove: (player, allEntities) => {
             if (!player) return { x: 0, y: 0 };
 
@@ -94,6 +102,54 @@
             survivalSystem.smoothedMove.y += (targetMove.y - survivalSystem.smoothedMove.y) * survivalSystem.SMOOTHING_FACTOR;
 
             return { x: survivalSystem.smoothedMove.x, y: survivalSystem.smoothedMove.y };
+        },
+
+        calculateSafeMove: (player, allEntities) => {
+            if (!player) return { x: 0, y: 0 };
+
+            let totalRepulsionX = 0;
+            let totalRepulsionY = 0;
+            const playerRadius = player.radius || 15;
+            const weights = [1, 0.6, 0.3];
+            const times = [0, 1000, 2000];
+
+            if (allEntities) {
+                for (const entity of Object.values(allEntities)) {
+                    if (!entity || entity.id === player.id || entity.isHarmless || entity.entityType === 1) {
+                        continue;
+                    }
+                    for (let i = 0; i < times.length; i++) {
+                        const predicted = survivalSystem.predictEntityPosition(entity, times[i]);
+                        const vecX = predicted.x - player.x;
+                        const vecY = predicted.y - player.y;
+                        const distance = Math.sqrt(vecX * vecX + vecY * vecY);
+                        if (distance === 0) continue;
+                        const entityRadius = entity.radius || 15;
+                        const safetyDistance = playerRadius + entityRadius + 20;
+
+                        if (distance < safetyDistance + 150) {
+                            const force = (1 / (distance * distance)) * weights[i];
+                            totalRepulsionX -= (vecX / distance) * force;
+                            totalRepulsionY -= (vecY / distance) * force;
+                        }
+                    }
+                }
+            }
+
+            const totalRepulsionMagnitude = Math.sqrt(totalRepulsionX**2 + totalRepulsionY**2);
+            let targetMove = { x: 5, y: 0 }; // Mouvement anti-AFK par défaut
+
+            if (totalRepulsionMagnitude > 0.001) {
+                targetMove = {
+                    x: (totalRepulsionX / totalRepulsionMagnitude) * survivalSystem.MAX_SPEED,
+                    y: (totalRepulsionY / totalRepulsionMagnitude) * survivalSystem.MAX_SPEED
+                };
+            }
+
+            survivalSystem.smoothedMove.x += (targetMove.x - survivalSystem.smoothedMove.x) * survivalSystem.SMOOTHING_FACTOR;
+            survivalSystem.smoothedMove.y += (targetMove.y - survivalSystem.smoothedMove.y) * survivalSystem.SMOOTHING_FACTOR;
+
+            return { x: survivalSystem.smoothedMove.x, y: survivalSystem.smoothedMove.y };
         }
     };
 
@@ -106,7 +162,7 @@
                 const player = modules.network.getPlayerState();
                 const entities = modules.gameState ? modules.gameState.entities : {};
                 if (player && player.id) {
-                    const bestMove = survivalSystem.calculateBestMove(player, entities);
+                    const bestMove = survivalSystem.calculateSafeMove(player, entities);
                     modules.network.sendMovement(bestMove.x, bestMove.y);
                 }
             }, 50);
@@ -201,3 +257,4 @@
     }, 500);
 
 })();
+
